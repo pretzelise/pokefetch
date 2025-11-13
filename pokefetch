@@ -1,0 +1,154 @@
+#!/usr/bin/env bash
+
+for i in "$@"; do
+  case $i in
+  "-v" | "--verbose")
+    # output the pokemon info to stderr
+    OPT_VERBOSE=1
+    ;;
+  "-f" | "--fetch")
+    # include system info alongside the sprite
+    OPT_FETCH=1
+    ;;
+  esac
+done
+CONFIG_DIR=${XDG_CONFIG_HOME:-$HOME/.config} # should almost always return `$HOME/.config`
+POTD_DIR="${CONFIG_DIR}/potd"                # the config directory that this script will use to store everything
+POTD_CACHE="${POTD_DIR}/cache"               # used to record which sprites have appeared before
+POKEGET_CMD='pokeget'                        # requires pokeget-rs for the pretty small sprites
+POKEGET_ARGS=('')                            # add any extra args for pokeget-rs here
+MAX_DEX_ID=905                               # max pokedex id in pokeget-rs. decrease this number to limit to specific generations.
+POKEMON_SEED_SECONDS=900                     # how many seconds between each new pokemon_seed
+SHINY_SEED_SECONDS=15                        # how many seconds between each new shiny_seed
+
+# ansi escape codes for colours + style
+HEAD='\e[34m'
+DATA='\e[35m'
+SHINY='\e[33m'
+BOLD='\e[1m'
+RESET='\e[0m'
+
+function convert_time() {
+  local newer_timestamp=$1
+  local older_timestamp=$2
+  local days_ago=$(((newer_timestamp - older_timestamp) / 86400))
+
+  case $older_timestamp in
+  $newer_timestamp)
+    printf "just now"
+    ;;
+  0)
+    printf "never"
+    ;;
+  *)
+    [ $days_ago -gt 0 ] && printf "$days_ago days ago" || printf "today"
+    ;;
+  esac
+}
+
+# this function was lifted from cutefetch on github
+function get_uptime() {
+  local up=$(uptime)
+  up=${up#*up }    # remove everything before "up "
+  up=${up%%,*}     # remove everything after first comma
+  echo $up | xargs # trim whitespace
+}
+
+function save_sprite() {
+  local output_path=$1
+  local timestamp=$2
+  if ! [ -f ${output_path} ]; then
+    echo "$timestamp" >$output_path                     # store the first seen value
+    $POKEGET_CMD ${POKEGET_ARGS[@]} >>$output_path 2>&1 # store the sprite and pokemon name too
+  fi
+
+}
+
+# seed the bash random number with the current date, snapped to midnight, as a unix timestamp
+pokemon_seed=$(date +%s)
+pokemon_seed=$((pokemon_seed - (pokemon_seed % POKEMON_SEED_SECONDS)))
+RANDOM=${pokemon_seed}
+pokedex_id=$((RANDOM % MAX_DEX_ID))
+POKEGET_ARGS=("$pokedex_id" "${POKEGET_ARGS[@]}")
+sprite_path="${POTD_CACHE}/${pokedex_id}"
+
+# roll for a shiny
+shiny_seed=$(date +%s)
+shiny_seed=$((shiny_seed - (shiny_seed % SHINY_SEED_SECONDS)))
+
+RANDOM=${shiny_seed}
+shiny_roll=$((RANDOM % 128))
+
+# check if this sprite has been saved yet
+[ -d ${POTD_DIR} ] || mkdir ${POTD_DIR}
+[ -d ${POTD_CACHE} ] || mkdir ${POTD_CACHE}
+
+save_sprite "${sprite_path}" "$pokemon_seed"
+pokemon_name="$(sed '2q;d' $sprite_path)"
+first_seen="$(head -n 1 $sprite_path)"
+
+# also save the shiny sprite if required
+if [ $shiny_roll -eq 0 ]; then
+  POKEGET_ARGS+=('--shiny')
+  sprite_path="${sprite_path}-shiny"
+  save_sprite ${sprite_path} $pokemon_seed
+fi
+
+# extract the shiny encounter date if available
+if [ $shiny_roll -eq 0 ]; then
+  shiny_seen=$(head -n 1 "${sprite_path}")
+else
+  [ -f "${sprite_path}-shiny" ] && shiny_seen=$(head -n 1 "${sprite_path}-shiny") || shiny_seen=0
+fi
+
+# get system info (originally lifted from cutefetch)
+systeminfo=()
+
+if ! [ -z ${OPT_FETCH+x} ]; then
+  systeminfo[0]="${BOLD}${HEAD}kn${RESET} ${DATA}$(uname -r | cut -f1 -d '-')${RESET}"
+  systeminfo[1]="${BOLD}${HEAD}sh${RESET} ${DATA}$(basename $SHELL)${RESET}"
+  systeminfo[2]="${BOLD}${HEAD}up${RESET} ${DATA}$(get_uptime)${RESET}"
+
+  # store the pokemon info along with the system info
+  if [ $shiny_roll -eq 0 ]; then
+    systeminfo[4]="${BOLD}${HEAD}pkmn${RESET} ${BOLD}${SHINY}${pokemon_name,,} (${pokedex_id})${RESET}"
+  else
+    systeminfo[4]="${BOLD}${HEAD}pkmn${RESET} ${DATA}${pokemon_name,,} (${pokedex_id})${RESET}"
+  fi
+
+  systeminfo[5]="${BOLD}${HEAD}seen${RESET} ${DATA}$(convert_time $pokemon_seed $first_seen)${RESET}"
+  systeminfo[6]="${BOLD}${HEAD}shny${RESET} ${DATA}$(convert_time $pokemon_seed $shiny_seen)${RESET}"
+
+  # calculate how many extra lines will be needed to pad the sprite to fit all fetch info
+  sprite_lines=$(cat ${sprite_path} | tail -n +3 | wc -l)
+  info_lines=${#systeminfo[@]}
+  extra_lines=$((info_lines - sprite_lines))
+fi
+
+# print the pokemon info to stderr if -v or --verbose was passed
+[ -z ${OPT_VERBOSE+x} ] || >&2 echo -e "dex_id: ${pokedex_id}\npkmn_name: ${pokemon_name}\nshiny_roll: ${shiny_roll}\npkmn_seed: ${pokemon_seed}\nshiny_seed: ${shiny_seed}\nfirst_seen: ${first_seen}"
+
+# iterate over every line in the sprite, appending system info when available
+index=0
+tail -n +3 "${sprite_path}" | while IFS= read -r line; do
+  if [ $index -le ${#systeminfo[@]} ]; then
+    echo -ne "${line}    "          # print the sprite line
+    printf '\e7'                    # save the cursor position in case we need to print extra lines
+    echo -e "${systeminfo[$index]}" # print the fetch info
+  else
+    echo "${line}" # no fetch info to append, so we print the sprite line and nothing else
+  fi
+
+  index=$((index + 1))
+done
+
+# reached the end of the sprite with more fetch info to print
+if ! [ -z $OPT_FETCH ] && [ $extra_lines -gt 0 ]; then
+  for i in $(seq $sprite_lines ${#systeminfo[@]}); do
+    printf '\e8'   # restore the cursor position
+    printf '\e[1B' # move the cursor down 1 line
+    printf '\e7'   # save the new cursor position
+
+    echo -e "${systeminfo[$i]}"
+  done
+fi
