@@ -6,15 +6,15 @@ for i in "$@"; do
     # output the pokemon info to stderr
     OPT_VERBOSE=1
     ;;
-  "-f" | "--fetch")
-    # include system info alongside the sprite
-    OPT_FETCH=1
+  "-n" | "--nofetch")
+    # dont include system info alongside the sprite
+    OPT_NOFETCH=1
     ;;
   esac
 done
 CONFIG_DIR=${XDG_CONFIG_HOME:-$HOME/.config} # should almost always return `$HOME/.config`
-POTD_DIR="${CONFIG_DIR}/potd"                # the config directory that this script will use to store everything
-POTD_CACHE="${POTD_DIR}/cache"               # used to record which sprites have appeared before
+POKEFETCH_DIR="${CONFIG_DIR}/pokefetch"      # the config directory that this script will use to store everything
+POKEFETCH_CACHE="${POKEFETCH_DIR}/cache"     # used to record which sprites have appeared before
 POKEGET_CMD='pokeget'                        # requires pokeget-rs for the pretty small sprites
 POKEGET_ARGS=('')                            # add any extra args for pokeget-rs here
 MAX_DEX_ID=905                               # max pokedex id in pokeget-rs. decrease this number to limit to specific generations.
@@ -70,7 +70,7 @@ pokemon_seed=$((pokemon_seed - (pokemon_seed % POKEMON_SEED_SECONDS)))
 RANDOM=${pokemon_seed}
 pokedex_id=$((RANDOM % MAX_DEX_ID))
 POKEGET_ARGS=("$pokedex_id" "${POKEGET_ARGS[@]}")
-sprite_path="${POTD_CACHE}/${pokedex_id}"
+sprite_path="${POKEFETCH_CACHE}/${pokedex_id}"
 
 # roll for a shiny
 shiny_seed=$(date +%s)
@@ -80,8 +80,8 @@ RANDOM=${shiny_seed}
 shiny_roll=$((RANDOM % 128))
 
 # check if this sprite has been saved yet
-[ -d ${POTD_DIR} ] || mkdir ${POTD_DIR}
-[ -d ${POTD_CACHE} ] || mkdir ${POTD_CACHE}
+[ -d ${POKEFETCH_DIR} ] || mkdir ${POKEFETCH_DIR}
+[ -d ${POKEFETCH_CACHE} ] || mkdir ${POKEFETCH_CACHE}
 
 save_sprite "${sprite_path}" "$pokemon_seed"
 pokemon_name="$(sed '2q;d' $sprite_path)"
@@ -104,7 +104,7 @@ fi
 # get system info (originally lifted from cutefetch)
 systeminfo=()
 
-if ! [ -z ${OPT_FETCH+x} ]; then
+if [ -z ${OPT_NOFETCH+x} ]; then
   systeminfo[0]="${BOLD}${HEAD}kn${RESET} ${DATA}$(uname -r | cut -f1 -d '-')${RESET}"
   systeminfo[1]="${BOLD}${HEAD}sh${RESET} ${DATA}$(basename $SHELL)${RESET}"
   systeminfo[2]="${BOLD}${HEAD}up${RESET} ${DATA}$(get_uptime)${RESET}"
@@ -143,7 +143,7 @@ tail -n +3 "${sprite_path}" | while IFS= read -r line; do
 done
 
 # reached the end of the sprite with more fetch info to print
-if ! [ -z $OPT_FETCH ] && [ $extra_lines -gt 0 ]; then
+if [ -z $OPT_NOFETCH ] && [ $extra_lines -gt 0 ]; then
   for i in $(seq $sprite_lines ${#systeminfo[@]}); do
     printf '\e8'   # restore the cursor position
     printf '\e[1B' # move the cursor down 1 line
