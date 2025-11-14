@@ -15,9 +15,7 @@ done
 CONFIG_DIR=${XDG_CONFIG_HOME:-$HOME/.config} # should almost always return `$HOME/.config`
 POKEFETCH_DIR="${CONFIG_DIR}/pokefetch"      # the config directory that this script will use to store everything
 POKEFETCH_CACHE="${POKEFETCH_DIR}/cache"     # used to record which sprites have appeared before
-POKEGET_CMD='pokeget'                        # requires pokeget-rs for the pretty small sprites
-POKEGET_ARGS=('')                            # add any extra args for pokeget-rs here
-MAX_DEX_ID=905                               # max pokedex id in pokeget-rs. decrease this number to limit to specific generations.
+MAX_DEX_ID=905                               # max pokedex id. decrease this number to limit to specific generations.
 POKEMON_SEED_SECONDS=900                     # how many seconds between each new pokemon_seed
 SHINY_SEED_SECONDS=15                        # how many seconds between each new shiny_seed
 
@@ -54,14 +52,33 @@ function get_uptime() {
   echo $up | xargs # trim whitespace
 }
 
-function save_sprite() {
-  local output_path=$1
-  local timestamp=$2
-  if ! [ -f ${output_path} ]; then
-    echo "$timestamp" >$output_path                     # store the first seen value
-    $POKEGET_CMD ${POKEGET_ARGS[@]} >>$output_path 2>&1 # store the sprite and pokemon name too
-  fi
+function get_sprite() {
+  local dex_id=$1
+  local shiny=$2
+  local timestamp=$3
 
+  local repo_url="https://raw.githubusercontent.com/pretzelise/pokefetch-colorscripts/refs/heads/main/colorscripts"
+  local output_path
+
+  case $shiny in
+  "shiny")
+    output_file="$dex_id-shiny"
+    output_path="${POKEFETCH_CACHE}/$dex_id-shiny"
+    ;;
+  "regular")
+    output_file="$dex_id"
+    output_path="${POKEFETCH_CACHE}/$dex_id"
+    ;;
+  "*")
+    echo "Invalid type provided. Please enter either 'shiny' or 'regular'."
+    return
+    ;;
+  esac
+
+  if ! [ -f "$output_path" ]; then
+    echo "$timestamp" >"$output_path" # store the first seen value
+    curl "$repo_url/$output_file" -s >>"$output_path"
+  fi
 }
 
 # seed the bash random number with the current date, snapped to midnight, as a unix timestamp
@@ -69,7 +86,6 @@ pokemon_seed=$(date +%s)
 pokemon_seed=$((pokemon_seed - (pokemon_seed % POKEMON_SEED_SECONDS)))
 RANDOM=${pokemon_seed}
 pokedex_id=$((RANDOM % MAX_DEX_ID))
-POKEGET_ARGS=("$pokedex_id" "${POKEGET_ARGS[@]}")
 sprite_path="${POKEFETCH_CACHE}/${pokedex_id}"
 
 # roll for a shiny
@@ -83,15 +99,14 @@ shiny_roll=$((RANDOM % 128))
 [ -d ${POKEFETCH_DIR} ] || mkdir ${POKEFETCH_DIR}
 [ -d ${POKEFETCH_CACHE} ] || mkdir ${POKEFETCH_CACHE}
 
-save_sprite "${sprite_path}" "$pokemon_seed"
+get_sprite $pokedex_id "regular" $pokemon_seed
 pokemon_name="$(sed '2q;d' $sprite_path)"
 first_seen="$(head -n 1 $sprite_path)"
 
 # also save the shiny sprite if required
 if [ $shiny_roll -eq 0 ]; then
-  POKEGET_ARGS+=('--shiny')
   sprite_path="${sprite_path}-shiny"
-  save_sprite ${sprite_path} $pokemon_seed
+  get_sprite $pokedex_id "shiny" $pokemon_seed
 fi
 
 # extract the shiny encounter date if available
